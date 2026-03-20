@@ -10,6 +10,7 @@
 import https from 'https';
 import fs from 'fs';
 import path from 'path';
+import os from 'os';
 import { fileURLToPath } from 'url';
 import crypto from 'crypto';
 import { markdownToSections } from './markdown-to-sections.mjs';
@@ -23,6 +24,7 @@ const APPID = process.env.WECHAT_APPID || '';
 const APPSECRET = process.env.WECHAT_APPSECRET || '';
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
 const MODELSCOPE_API_KEY = process.env.MODELSCOPE_API_KEY || '';
+const CONVEX_URL = process.env.CONVEX_URL || '';
 
 if (!APPID || !APPSECRET) {
   console.error('❌ 错误：未配置微信公众号 AppID 和 AppSecret');
@@ -452,6 +454,87 @@ async function main() {
   }
   
   console.log('请在微信公众号后台查看并发布。\n');
+
+  // 5. 生成 .md 存档文件
+  const now = new Date();
+  const dateStr = now.toISOString().slice(0, 10); // YYYY-MM-DD
+  const slug = `${dateStr}-${Date.now()}`;
+  const excerpt = content.replace(/[#*`>\[\]!\-]/g, '').replace(/\n+/g, ' ').trim().slice(0, 120);
+  const coverUrl = (global.uploadedMediaUrls || []).find(m => m.type === 'cover')?.url || '';
+
+  const frontmatter = [
+    '---',
+    `title: "${title.replace(/"/g, '\\"')}"`,
+    `slug: "${slug}"`,
+    `excerpt: "${excerpt.replace(/"/g, '\\"')}"`,
+    `tags: ["微信公众号"]`,
+    `published: true`,
+    `source: wechat`,
+    `author: ${author}`,
+    coverUrl ? `coverImage: ${coverUrl}` : null,
+    `wechatMediaId: ${result.mediaId}`,
+    '---',
+  ].filter(Boolean).join('\n');
+
+  let mdContent = frontmatter + '\n\n';
+  if (coverUrl) {
+    mdContent += `![封面](${coverUrl})\n\n`;
+  }
+  mdContent += content;
+
+  // 写入 articles/ 目录（本地存档）
+  const articlesDir = path.resolve(__dirname, '../../articles');
+  if (!fs.existsSync(articlesDir)) {
+    fs.mkdirSync(articlesDir, { recursive: true });
+  }
+  const mdFileName = `${slug}.md`;
+  const mdFilePath = path.join(articlesDir, mdFileName);
+  fs.writeFileSync(mdFilePath, mdContent, 'utf-8');
+  console.log(`📄 文章已存档: ${mdFilePath}`);
+
+  // 6. 同步到 Convex 数据库（直接 HTTP API，无需本地项目）
+  if (CONVEX_URL) {
+    try {
+      console.log('\n🔄 同步到网站数据库...');
+      const mutationBody = JSON.stringify({
+        path: 'posts:upsertBySlug',
+        args: {
+          title,
+          slug,
+          content,
+          excerpt,
+          tags: ['微信公众号'],
+          published: true,
+          visible: true,
+          source: 'wechat',
+          coverImage: coverUrl || undefined,
+          author: author || undefined,
+        },
+      });
+      const convexResult = await httpsRequest(`${CONVEX_URL}/api/mutation`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: mutationBody,
+      });
+      console.log(`✅ 已同步到网站！(${convexResult.action || 'done'})`);
+    } catch (err) {
+      console.error(`⚠️  Convex 同步失败: ${err.message}`);
+      console.error('   文章已本地存档，可稍后手动同步。');
+    }
+  } else {
+    console.log('ℹ️  未配置 CONVEX_URL，跳过数据库同步。');
+  }
+
+  // 7. 本地有 portfolio-v2 则拷贝备份（可选）
+  const portfolioPublisherDir = path.resolve(os.homedir(), 'Documents/develop/H5Projects/portfolio-v2/content/publisher');
+  if (fs.existsSync(path.resolve(os.homedir(), 'Documents/develop/H5Projects/portfolio-v2'))) {
+    if (!fs.existsSync(portfolioPublisherDir)) {
+      fs.mkdirSync(portfolioPublisherDir, { recursive: true });
+    }
+    const destPath = path.join(portfolioPublisherDir, mdFileName);
+    fs.copyFileSync(mdFilePath, destPath);
+    console.log(`📋 已备份到 portfolio-v2: ${destPath}`);
+  }
 }
 
 // 运行
