@@ -203,6 +203,9 @@ async function createDraft(article) {
 }
 
 // ============ 上传文章中的图片和视频到微信 CDN ============
+// 全局记录所有上传的图片 URL（用于最后的回执）
+global.uploadedMediaUrls = [];
+
 async function uploadInlineMedia(html) {
   const mediaMap = {};
 
@@ -220,7 +223,16 @@ async function uploadInlineMedia(html) {
         `https://api.weixin.qq.com/cgi-bin/media/uploadimg?access_token=${token}`,
         'media', filePath
       );
-      if (result.url) { mediaMap[filePath] = result.url; console.log('✅ 图片上传成功'); }
+      if (result.url) { 
+        mediaMap[filePath] = result.url; 
+        // 记录上传成功的图片 URL
+        global.uploadedMediaUrls.push({ 
+          local: path.basename(filePath), 
+          url: result.url 
+        });
+        console.log('✅ 图片上传成功');
+        console.log(`   🔗 CDN URL: ${result.url}`);
+      }
     } catch (e) { console.error(`❌ 图片上传失败: ${e.message}`); }
   }
 
@@ -270,14 +282,16 @@ function markdownToWechatHTML(markdown, options = {}) {
 
 // ============ 生成封面 ============
 async function generateCover(title, content, provider) {
-  const prompt = `创建一个现代扁平风格的封面图，主题：${title}。
+  const prompt = `创建一个现代扁平风格的微信公众号封面图。
 要求：
-- 横版 16:9 比例
+- 横版 16:9 比例（1024x576）
 - 现代扁平设计风格
-- 主题相关的视觉元素
-- 所有文字必须使用中文
-- 文字尽量居中显示
-- 色彩鲜明，吸引眼球`;
+- 主题相关的视觉元素和背景
+- 封面中央大字显示标题：${title}
+- 标题字体大、清晰、易读
+- 只显示标题文字，不要添加其他文字
+- 色彩鲜明，吸引眼球
+- 所有文字必须使用中文`;
 
   const outputPath = `/tmp/wechat-cover-${Date.now()}.png`;
 
@@ -298,7 +312,7 @@ async function generateCover(title, content, provider) {
       await modelscopeGenerateImage(prompt, outputPath, MODELSCOPE_API_KEY, {
         model: 'Qwen/Qwen-Image-2512',
         size: '1024x576',
-        timeout: 120000,
+        timeout: 300000,
       });
     } else {
       await geminiGenerateImage(prompt, outputPath, GEMINI_API_KEY, {
@@ -375,6 +389,13 @@ async function main() {
     if (uploadResult.url) {
       coverImageUrl = uploadResult.url;
       console.log('✅ 封面图上传到 CDN 完成');
+      console.log(`   🔗 CDN URL: ${coverImageUrl}`);
+      // 记录封面图 URL
+      global.uploadedMediaUrls.push({ 
+        local: path.basename(coverPath), 
+        url: coverImageUrl,
+        type: 'cover'
+      });
     }
   }
   
@@ -415,11 +436,36 @@ async function main() {
   
   console.log('\n✅ 文章已同步到微信公众号草稿箱！');
   console.log(`Media ID: ${result.mediaId}`);
-  console.log('\n请在微信公众号后台查看并发布。\n');
+  
+  // 输出上传的图片 URL 回执
+  if (global.uploadedMediaUrls && global.uploadedMediaUrls.length > 0) {
+    console.log('\n📸 上传的图片 URL 回执:');
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    global.uploadedMediaUrls.forEach((media, index) => {
+      const typeLabel = media.type === 'cover' ? '🖼️ 封面图' : '📸 内联图片';
+      console.log(`${index + 1}. ${typeLabel}: ${media.local}`);
+      console.log(`   ${media.url}`);
+    });
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
+  } else {
+    console.log('\nℹ️  本次发布没有上传内联图片（只有封面图）。\n');
+  }
+  
+  console.log('请在微信公众号后台查看并发布。\n');
 }
 
 // 运行
 main().catch(error => {
   console.error('\n❌ 发布失败:', error.message);
+  
+  // 即使失败也输出已上传的图片 URL
+  if (global.uploadedMediaUrls && global.uploadedMediaUrls.length > 0) {
+    console.error('\n📸 已上传的图片 URL:');
+    global.uploadedMediaUrls.forEach((media, index) => {
+      console.error(`${index + 1}. ${media.local}`);
+      console.error(`   ${media.url}`);
+    });
+  }
+  
   process.exit(1);
 });
