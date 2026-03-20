@@ -123,6 +123,31 @@ function guessMimeType(filePath) {
   return MIME_TYPES[path.extname(filePath).toLowerCase()] || 'application/octet-stream';
 }
 
+// ============ 图床上传 ============
+async function uploadToCatbox(filePath) {
+  const url = await httpsPostMultipart(
+    'https://catbox.moe/user/api.php',
+    'fileToUpload',
+    filePath,
+    guessMimeType(filePath),
+    { reqtype: 'fileupload' }
+  );
+  if (typeof url === 'string' && url.startsWith('https://')) return url;
+  throw new Error(`Catbox 上传失败: ${url}`);
+}
+
+async function uploadToSmms(filePath) {
+  const SMMS_TOKEN = process.env.SMMS_TOKEN || '';
+  const result = await httpsPostMultipart(
+    'https://sm.ms/api/v2/upload',
+    'smfile',
+    filePath,
+    guessMimeType(filePath)
+  );
+  if (result.success && result.data?.url) return result.data.url;
+  throw new Error(`SM.MS 上传失败: ${JSON.stringify(result)}`);
+}
+
 // ============ 微信 API ============
 async function getAccessToken() {
   if (tokenCache.token && Date.now() < tokenCache.expiresAt - 60000) {
@@ -377,8 +402,28 @@ async function main() {
   
   // 2. 转换内容
   console.log('📄 转换文章格式...');
-  
-  // 先上传封面图到微信 CDN（用于文章内容）
+
+  // 先上传封面图到公开图床（供网站前端展示）
+  let publicCoverUrl = '';
+  if (coverPath && fs.existsSync(coverPath)) {
+    try {
+      publicCoverUrl = await uploadToCatbox(coverPath);
+      console.log(`✅ 封面上传到 Catbox: ${publicCoverUrl}`);
+    } catch (err) {
+      console.error(`⚠️  Catbox 上传失败: ${err.message}`);
+      const SMMS_TOKEN = process.env.SMMS_TOKEN;
+      if (SMMS_TOKEN) {
+        try {
+          publicCoverUrl = await uploadToSmms(coverPath);
+          console.log(`✅ 封面上传到 SM.MS: ${publicCoverUrl}`);
+        } catch (err2) {
+          console.error(`⚠️  SM.MS 上传也失败: ${err2.message}`);
+        }
+      }
+    }
+  }
+
+  // 再上传封面图到微信 CDN（用于微信公众号内容）
   let coverImageUrl = null;
   if (coverPath && fs.existsSync(coverPath)) {
     console.log('📤 上传封面图到微信 CDN...');
@@ -392,12 +437,6 @@ async function main() {
       coverImageUrl = uploadResult.url;
       console.log('✅ 封面图上传到 CDN 完成');
       console.log(`   🔗 CDN URL: ${coverImageUrl}`);
-      // 记录封面图 URL
-      global.uploadedMediaUrls.push({ 
-        local: path.basename(coverPath), 
-        url: coverImageUrl,
-        type: 'cover'
-      });
     }
   }
   
@@ -460,7 +499,6 @@ async function main() {
   const dateStr = now.toISOString().slice(0, 10); // YYYY-MM-DD
   const slug = `${dateStr}-${Date.now()}`;
   const excerpt = content.replace(/[#*`>\[\]!\-]/g, '').replace(/\n+/g, ' ').trim().slice(0, 120);
-  const coverUrl = (global.uploadedMediaUrls || []).find(m => m.type === 'cover')?.url || '';
 
   const frontmatter = [
     '---',
@@ -471,14 +509,14 @@ async function main() {
     `published: true`,
     `source: wechat`,
     `author: ${author}`,
-    coverUrl ? `coverImage: ${coverUrl}` : null,
+    publicCoverUrl ? `coverImage: ${publicCoverUrl}` : null,
     `wechatMediaId: ${result.mediaId}`,
     '---',
   ].filter(Boolean).join('\n');
 
   let mdContent = frontmatter + '\n\n';
-  if (coverUrl) {
-    mdContent += `![封面](${coverUrl})\n\n`;
+  if (publicCoverUrl) {
+    mdContent += `![封面](${publicCoverUrl})\n\n`;
   }
   mdContent += content;
 
@@ -507,7 +545,7 @@ async function main() {
           published: true,
           visible: true,
           source: 'wechat',
-          coverImage: coverUrl || undefined,
+          coverImage: publicCoverUrl || undefined,
           author: author || undefined,
         },
       });

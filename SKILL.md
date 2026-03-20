@@ -11,9 +11,10 @@ trigger: 当用户要求"发布微信文章"、"写公众号"、"直接发微信
 ## 特性
 
 - ✅ **直接发布**：无需预览，直接同步到微信公众号草稿箱
-- ✅ **内置生图**：集成 Gemini Pro 生图模块，不依赖外部 skill
+- ✅ **内置生图**：集成魔搭/Qwen-Image 生图模块，不依赖外部 skill
 - ✅ **自动排版**：转换为微信兼容的 HTML 格式
 - ✅ **图片/视频上传**：自动上传图片和视频到微信 CDN
+- ✅ **图床同步**：封面图自动上传到 Catbox（+ SM.MS 备选），供网站前端展示，无防盗链问题
 - ✅ **独立运行**：完全独立，可直接分享
 
 ## 配置
@@ -27,6 +28,7 @@ MODELSCOPE_API_KEY=your_token    # 魔搭生图（国内推荐，免费）
 # GEMINI_API_KEY=your_gemini_key # Gemini 生图（需代理，可选）
 # GEMINI_PRO_PROXY=http://127.0.0.1:7890  # Gemini 代理（可选）
 WECHAT_DEFAULT_AUTHOR=龙虾       # 默认作者（可选）
+# SMMS_TOKEN=your_smms_token     # SM.MS 图床 Token（备选，Catbox 失败时使用）
 ```
 
 ## 使用方法
@@ -41,9 +43,9 @@ AI 会：
 1. 生成 5-8 个候选标题
 2. 用户选择标题
 3. 生成文章内容
-4. 生成封面图（Gemini Pro）
-5. 转换为微信 HTML
-6. 上传图片到微信 CDN
+4. 生成封面图（ModelScope/Gemini）并上传到图床（Catbox，备选 SM.MS）
+5. 转换为微信 HTML（封面图用微信 CDN URL）
+6. 上传文章图片到微信 CDN
 7. 创建草稿并同步
 8. 返回 Media ID
 
@@ -79,15 +81,19 @@ AI 会：
   ↓
 生成封面（ModelScope/Gemini，后台）
   ↓
-转换为微信 HTML
+封面上传到公开图床（Catbox优先，SM.MS备选）→ 图床 URL
   ↓
-上传所有图片到微信 CDN → 记录封面图 URL
+封面上传到微信 CDN → 微信内容用 CDN URL
   ↓
-创建草稿
+转换为微信 HTML（封面用 CDN URL）
   ↓
-生成 .md 存档（含封面图 URL）→ articles/
+上传文章内联图片/视频到微信 CDN
   ↓
-同步到 Convex 数据库（网站实时生效）
+创建草稿（封面图用微信 CDN URL）
+  ↓
+生成 .md 存档（含图床封面 URL）→ articles/
+  ↓
+同步到 Convex 数据库（封面用图床 URL，网站前端无防盗链）→ 网站实时生效
   ↓
 本地备份到 content/publisher/（如有 portfolio-v2）
   ↓
@@ -360,11 +366,15 @@ const coverPath = await generateCover(title, content);
 const sections = markdownToSections(markdown, { theme: 'magazine' });
 const html = wxRenderSections(sections, { theme: 'magazine' });
 
-// 3. 上传图片到微信 CDN
-const processedHTML = await uploadInlineMedia(html);
+// 3. 上传封面图到公开图床（供网站前端展示）
+const publicCoverUrl = await uploadToCatbox(coverPath);
+// 同时上传封面图到微信 CDN（供微信公众号内容使用）
 const thumbMediaId = await uploadImage(coverPath);
 
-// 4. 创建草稿
+// 4. 上传文章内联图片到微信 CDN
+const processedHTML = await uploadInlineMedia(html);
+
+// 5. 创建草稿
 const result = await createDraft({
   title, content: processedHTML, thumbMediaId, author: '龙虾'
 });
@@ -383,7 +393,7 @@ console.log('草稿创建成功！Media ID:', result.mediaId);
 ## 依赖
 
 - Node.js 18+
-- Gemini API Key（用于生图）
+- 魔搭 ModelScope API Token（用于生图，推荐）
 - 微信公众号 AppID 和 AppSecret
 
 ## License
