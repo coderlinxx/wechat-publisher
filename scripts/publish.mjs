@@ -20,6 +20,21 @@ import { generateImage as geminiGenerateImage } from './gemini-imagegen.mjs';
 import { generateImage as modelscopeGenerateImage } from './modelscope-imagegen.mjs';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
+// ============ 加载 .env 文件 ============
+const envPath = path.resolve(__dirname, '../.env');
+if (fs.existsSync(envPath)) {
+  const envContent = fs.readFileSync(envPath, 'utf-8');
+  envContent.split('\n').forEach(line => {
+    const trimmed = line.trim();
+    if (trimmed && !trimmed.startsWith('#')) {
+      const [key, ...rest] = trimmed.split('=');
+      if (key) {
+        process.env[key.trim()] = rest.join('=').trim();
+      }
+    }
+  });
+}
+
 // ============ 配置（从环境变量读取）============
 const APPID = process.env.WECHAT_APPID || '';
 const APPSECRET = process.env.WECHAT_APPSECRET || '';
