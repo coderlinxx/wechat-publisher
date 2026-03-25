@@ -11,6 +11,7 @@ import https from 'https';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+import readline from 'readline';
 import { fileURLToPath } from 'url';
 import crypto from 'crypto';
 import { markdownToSections } from './markdown-to-sections.mjs';
@@ -518,8 +519,8 @@ async function main() {
   });
   
   console.log('\n✅ 文章已同步到微信公众号草稿箱！');
-  console.log(`Media ID: ${result.mediaId}`);
-  
+  console.log(`📱 Media ID: ${result.mediaId}`);
+
   // 输出上传的图片 URL 回执
   if (global.uploadedMediaUrls && global.uploadedMediaUrls.length > 0) {
     console.log('\n📸 上传的图片 URL 回执:');
@@ -533,10 +534,8 @@ async function main() {
   } else {
     console.log('\nℹ️  本次发布没有上传内联图片（只有封面图）。\n');
   }
-  
-  console.log('请在微信公众号后台查看并发布。\n');
 
-  // 5. 生成 .md 存档文件
+  // 5. 生成完整 Markdown 供审核
   const now = new Date();
   const dateStr = now.toISOString().slice(0, 10); // YYYY-MM-DD
   const slug = `${dateStr}-${Date.now()}`;
@@ -564,47 +563,107 @@ async function main() {
 
   const mdFileName = `${slug}.md`;
 
-  // 6. 同步到 Convex 数据库（直接 HTTP API，无需本地项目）
-  if (CONVEX_URL) {
-    try {
-      console.log('\n🔄 同步到网站数据库...');
-      const mutationBody = JSON.stringify({
-        path: 'posts:upsertBySlug',
-        args: {
-          title,
-          slug,
-          content,
-          excerpt,
-          tags: ['微信公众号'],
-          published: true,
-          visible: true,
-          source: 'wechat',
-          coverImage: publicCoverUrl || undefined,
-          author: author || undefined,
-        },
-      });
-      const convexResult = await httpsRequest(`${CONVEX_URL}/api/mutation`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: mutationBody,
-      });
-      console.log(`✅ 已同步到网站！(${convexResult.action || 'done'})`);
-    } catch (err) {
-      console.error(`⚠️  Convex 同步失败: ${err.message}`);
-    }
-  } else {
-    console.log('ℹ️  未配置 CONVEX_URL，跳过数据库同步。');
-  }
+  // 5a. 写入临时文件供审核
+  const reviewFilePath = `/tmp/wechat-draft-${slug}.md`;
+  fs.writeFileSync(reviewFilePath, mdContent, 'utf-8');
+  console.log('📝 内容已准备好审核');
+  console.log(`   📄 Markdown 文件: ${reviewFilePath}`);
+  console.log('\n═══════════════════════════════════════════════');
+  console.log('📋 【内容审核】请查看下面的 Markdown，确认无误后再发布');
+  console.log('═══════════════════════════════════════════════\n');
+  console.log(mdContent);
+  console.log('\n═══════════════════════════════════════════════');
+  console.log('📌 提示：');
+  console.log('  • 本地 CLI：编辑上述 Markdown 文件后，运行下面命令确认发布');
+  console.log('  • OpenClaw 机器人：请确认内容无误（无需编辑，可在手机上查看）');
+  console.log(`  • 草稿已在微信公众号后台: Media ID ${result.mediaId}`);
+  console.log('═══════════════════════════════════════════════\n');
 
-  // 7. 本地有 portfolio-v2 则备份
-  const portfolioPublisherDir = path.resolve(os.homedir(), 'Documents/develop/H5Projects/portfolio-v2/content/publisher');
-  if (fs.existsSync(path.resolve(os.homedir(), 'Documents/develop/H5Projects/portfolio-v2'))) {
-    if (!fs.existsSync(portfolioPublisherDir)) {
-      fs.mkdirSync(portfolioPublisherDir, { recursive: true });
-    }
-    const destPath = path.join(portfolioPublisherDir, mdFileName);
-    fs.writeFileSync(destPath, mdContent, 'utf-8');
-    console.log(`📋 已备份到 portfolio-v2: ${destPath}`);
+  // 检查是否是 OpenClaw 机器人调用（通过检查特定环境变量）
+  const isOpenClawBot = process.env.OPENCLAW_INVOCATION === 'true';
+
+  if (isOpenClawBot) {
+    // OpenClaw 场景：需要用户通过机器人确认
+    console.log('🤖 OpenClaw 机器人模式 - 请在飞书/QQ 确认发布');
+    console.log('   回复 "✅ 确认发布" 继续，或 "❌ 取消" 中止');
+    console.log('   （如仅修改内容，请重新发布）\n');
+
+    // 返回审核结果，让 skill 框架处理用户确认
+    return {
+      status: 'reviewing',
+      mediaId: result.mediaId,
+      slug,
+      draftPath: reviewFilePath,
+      mdContent,
+      message: `✅ 内容已生成并推送到微信草稿箱\n\n📱 Media ID: ${result.mediaId}\n\n请确认内容质量，确认后将发布到网站数据库`,
+    };
+  } else {
+    // CLI 本地场景：使用 readline 交互确认
+    console.log('💻 本地 CLI 模式\n');
+    const rl = readline.createInterface({
+      input: process.stdin,
+      output: process.stdout,
+    });
+
+    return new Promise((resolve, reject) => {
+      rl.question('👉 确认发布到网站数据库？(y/n): ', async (answer) => {
+        rl.close();
+
+        if (answer.toLowerCase() !== 'y') {
+          console.log('\n❌ 已取消发布。草稿仍在微信公众号。');
+          console.log(`📄 Markdown 已保存: ${reviewFilePath}\n`);
+          process.exit(0);
+        }
+
+        console.log('\n✅ 继续发布流程...\n');
+
+        // 6. 同步到 Convex 数据库（直接 HTTP API，无需本地项目）
+        if (CONVEX_URL) {
+          try {
+            console.log('🔄 同步到网站数据库...');
+            const mutationBody = JSON.stringify({
+              path: 'posts:upsertBySlug',
+              args: {
+                title,
+                slug,
+                content,
+                excerpt,
+                tags: ['微信公众号'],
+                published: true,
+                visible: true,
+                source: 'wechat',
+                coverImage: publicCoverUrl || undefined,
+                author: author || undefined,
+              },
+            });
+            const convexResult = await httpsRequest(`${CONVEX_URL}/api/mutation`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: mutationBody,
+            });
+            console.log(`✅ 已同步到网站！(${convexResult.action || 'done'})`);
+          } catch (err) {
+            console.error(`⚠️  Convex 同步失败: ${err.message}`);
+          }
+        } else {
+          console.log('ℹ️  未配置 CONVEX_URL，跳过数据库同步。');
+        }
+
+        // 7. 本地有 portfolio-v2 则备份
+        const portfolioPublisherDir = path.resolve(os.homedir(), 'Documents/develop/H5Projects/portfolio-v2/content/publisher');
+        if (fs.existsSync(path.resolve(os.homedir(), 'Documents/develop/H5Projects/portfolio-v2'))) {
+          if (!fs.existsSync(portfolioPublisherDir)) {
+            fs.mkdirSync(portfolioPublisherDir, { recursive: true });
+          }
+          const destPath = path.join(portfolioPublisherDir, mdFileName);
+          fs.writeFileSync(destPath, mdContent, 'utf-8');
+          console.log(`📋 已备份到 portfolio-v2: ${destPath}`);
+        }
+
+        console.log('\n🎉 完成！\n');
+        resolve();
+      });
+    });
   }
 }
 
