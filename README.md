@@ -29,12 +29,19 @@ Markdown ──▶ Sections ──▶ WeChat HTML ──▶ Draft on WeChat MP
 
 ## Features
 
-- **One-command publish** — Markdown in, WeChat draft out
-- **macOS-style code blocks** — red/yellow/green dots header with horizontal scrolling
-- **Dual image generation** — ModelScope Qwen-Image-2512 (China, free) + Gemini Pro (global), auto-fallback
-- **Auto image upload** — local images uploaded to WeChat CDN automatically
-- **Magazine theme** — optional "magazine-style" layout with numbered sections, gradient accents, and spacious typography
-- **Pure inline styles** — all CSS inlined for WeChat compatibility, no `<style>` tags
+- ✅ **Direct publish** — one-command to draft without preview
+- ✅ **Built-in image generation** — integrated ModelScope Qwen-Image-2512 (China, free), no external dependencies
+- ✅ **Auto formatting** — converts to WeChat-compatible pure inline HTML
+- ✅ **Auto media upload** — inline images and videos auto-uploaded to WeChat CDN
+- ✅ **Dual CDN strategy** (**core innovation**):
+  - Cover uploaded to **public image CDN** (Catbox priority, SM.MS fallback) for website frontend, no hotlink protection
+  - Cover simultaneously uploaded to **WeChat CDN** for WeChat content, ensures consistency
+  - Maintains separate **CDN URLs** (for website) and **WeChat CDN URLs** (for content)
+- ✅ **Cloud sync** — auto-syncs to Convex database after publish, website updates in real-time
+- ✅ **Local backup** — auto-generates Markdown archive, supports backup to portfolio-v2
+- ✅ **macOS-style code blocks** — red/yellow/green dots header with horizontal scrolling
+- ✅ **Magazine theme** — optional "magazine-style" layout with numbered sections, gradient accents, and spacious typography
+- ✅ **Self-contained** — fully independent, can be shared directly
 
 ## Quick Start
 
@@ -105,6 +112,44 @@ node scripts/publish.mjs \
 | `--image-provider` | No | `modelscope` or `gemini` (auto-detected by default) |
 | `--theme` | No | `default` or `magazine` (default: `default`) |
 
+## Complete Publishing Workflow
+
+### 12-Step Publishing Process
+
+```
+1. Generate title candidates (AI)
+   ↓
+2. User selects a title
+   ↓
+3. Generate article content (AI)
+   ↓
+4. User review (local: write to /tmp/wechat-draft.md, remote: show summary)
+   ↓
+5. User confirm or modify and re-confirm
+   ↓
+6. Generate cover image (ModelScope Qwen-Image-2512, background, 1-3 min)
+   ↓
+7. 【Dual CDN Strategy】
+   ├─ Parallel: upload to public CDN (Catbox / SM.MS) → public CDN URL
+   └─ Parallel: upload to WeChat CDN → WeChat CDN URL
+   ↓
+8. Convert to WeChat HTML (pure inline styles, using WeChat CDN URL)
+   ↓
+9. Upload inline images/videos to WeChat CDN
+   ↓
+10. Create WeChat draft
+   ↓
+11. 【Sync & Backup】
+    ├─ Generate Markdown archive (with public CDN URL) → articles/
+    ├─ Sync to Convex database (website uses public CDN URL, no hotlink)
+    └─ Local backup to content/publisher/ (if portfolio-v2 exists)
+   ↓
+12. Complete! Return receipt:
+    ├─ Media ID (WeChat draft ID)
+    ├─ Public CDN URL (for website frontend)
+    └─ WeChat CDN URL (for WeChat content)
+```
+
 ## Project Structure
 
 ```
@@ -133,19 +178,53 @@ wechat-publisher/
                     │   macOS code blocks) │
                     └──────────┬───────────┘
                                │
-┌─────────────┐               ▼
-│ Cover Image │     ┌──────────────────────┐     ┌─────────────────┐
-│ ModelScope  │────▶│  Upload to WeChat    │────▶│   WeChat Draft  │
-│ or Gemini   │     │  CDN + Create Draft  │     │   (Media ID)    │
-                    └──────────────────────┘     └─────────────────┘
+┌──────────────────────────────────────────────────┐
+│         【Dual CDN Strategy】                     │
+├──────────────────────────────────────────────────┤
+│ ① Upload to public CDN                           │
+│    (Catbox priority / SM.MS fallback)            │
+│    For: website frontend, no hotlink protection  │
+│                                                   │
+│ ② Simultaneously upload to WeChat CDN            │
+│    For: WeChat content display                   │
+└──────────────────────────────────────────────────┘
+           ↓              ↓
+    ┌─────────────┐ ┌──────────────┐
+    │  Public CDN │ │ WeChat CDN   │
+    │     URL     │ │     URL      │
+    └─────────────┘ └──────────────┘
+           ↓              ↓
+        ┌────────────────────────┐
+        │  Create WeChat Draft   │
+        │  Generate MD Archive   │
+        │  Sync to Convex DB     │
+        │  Local backup          │
+        └────────────────────────┘
+                    ↓
+        ┌───────────────────────────────┐
+        │  Complete! Returns:            │
+        │  - Media ID (WeChat draft ID)  │
+        │  - Public CDN URL (frontend)   │
+        │  - WeChat CDN URL (content)    │
+        └───────────────────────────────┘
 ```
 
 ### Pipeline detail
 
 1. **Parse** — `markdown-to-sections.mjs` converts Markdown into a typed Section array (headings, paragraphs, code blocks, lists, etc.)
 2. **Render** — `wechat-renderer.mjs` transforms each Section into WeChat-compatible HTML with pure inline styles
-3. **Generate cover** — `modelscope-imagegen.mjs` (Qwen-Image-2512, recommended) or `gemini-imagegen.mjs` (Gemini Pro) creates a 16:9 cover image, with auto-fallback
-4. **Upload & publish** — `publish.mjs` uploads images to WeChat CDN and creates a draft via WeChat MP API
+3. **Generate cover** — `modelscope-imagegen.mjs` (Qwen-Image-2512, recommended, China-free) or `gemini-imagegen.mjs` (Gemini Pro, fallback) creates a 16:9 cover, 1-3 min, with auto-fallback
+4. **Dual CDN upload** (**core innovation**):
+   - Parallel upload cover to public CDN (Catbox priority, SM.MS fallback) → get public CDN URL
+   - Parallel upload cover to WeChat CDN → get WeChat CDN URL
+   - Maintain separate URLs: public CDN for website frontend (no hotlink protection), WeChat CDN for WeChat content (guaranteed consistency)
+5. **HTML conversion** — converts to WeChat-compatible HTML using WeChat CDN URL
+6. **Upload inline media** — images and videos in the article auto-uploaded to WeChat CDN
+7. **Create draft** — creates a draft via WeChat Official Account API
+8. **Sync & backup**:
+   - Generate Markdown archive (with public CDN URL) to `articles/` directory
+   - Sync to Convex database (website frontend uses public CDN URL, real-time update)
+   - Local backup to `content/publisher/` (if portfolio-v2 exists)
 
 ### Code block rendering
 
@@ -155,6 +234,106 @@ Code blocks use a macOS-style header (three colored dots) with horizontal scroll
 - Each line uses `<p style="white-space:nowrap">` to prevent wrapping
 - Spaces are converted to `&nbsp;` for WeChat compatibility
 - Font names with spaces use **single quotes** inside `style="..."` to avoid attribute truncation
+
+## Dual CDN Strategy Explained
+
+### Why dual CDN?
+
+| Scenario | Requirement | Solution |
+|----------|-------------|----------|
+| **WeChat content** | Use WeChat official CDN, display consistency | Upload to WeChat CDN, use WeChat CDN URL |
+| **Website frontend** | Independent CDN, no hotlink protection, persistent storage | Upload to public CDN (Catbox), store public CDN URL |
+| **Data persistence** | Record all URLs for audit trail and migration | Markdown archive records both URLs |
+
+### Workflow example
+
+```javascript
+// Single cover image
+const coverPath = './cover.png'
+
+// Dual CDN parallel upload
+const publicUrl = await uploadToCatbox(coverPath)      // Catbox / SM.MS
+const wxUrl = await uploadToWeChat(coverPath)           // WeChat CDN
+
+// WeChat content uses WeChat CDN URL
+const wxHtml = html.replace(/cover/, wxUrl)
+
+// Markdown archive saves both URLs
+const archive = `
+---
+title: Article Title
+coverUrl: ${publicUrl}      // website frontend
+wxMediaId: ${wxMediaId}     // WeChat usage
+---
+...
+`
+
+// Convex database uses public CDN URL (no hotlink)
+await syncToConvex({
+  title, content, coverUrl: publicUrl, mediaId
+})
+```
+
+### Benefits
+
+✅ **WeChat consistency** — WeChat MP always uses WeChat CDN URL, guaranteed display consistency
+✅ **Website independence** — website frontend uses public CDN URL, unaffected by WeChat hotlink protection
+✅ **Data safety** — both URLs saved, single-source-of-failure resilience
+✅ **Migration flexibility** — can switch CDN anytime since complete URL record exists
+
+## Convex Database Sync
+
+### Setup Convex (optional)
+
+If configured with `CONVEX_URL`, auto-syncs to Convex after publish:
+
+```env
+CONVEX_URL=https://your-deployment.convex.cloud
+```
+
+**Required Convex API implementation:**
+
+```typescript
+// convex/articles.ts
+import { mutation } from './_generated/server';
+import { v } from 'convex/values';
+
+export const createOrUpdate = mutation({
+  args: {
+    title: v.string(),
+    content: v.string(),
+    coverUrl: v.string(),      // public CDN URL
+    wxMediaId: v.string(),     // WeChat draft ID
+    mediaId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    return await ctx.db.insert('articles', {
+      ...args,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+  },
+});
+```
+
+Then register in HTTP routing:
+
+```typescript
+// convex/http.ts
+app.route({
+  path: '/api/mutation',
+  method: 'POST',
+  handler: async (request) => {
+    const body = await request.json();
+    if (body.action === 'articles:createOrUpdate') {
+      // call mutation and return result
+      return { ok: true };
+    }
+  },
+});
+```
+
+**On sync failure:** script captures exception and logs warning, but does NOT interrupt publish. WeChat draft still created successfully.
 
 ## Programmatic Usage
 

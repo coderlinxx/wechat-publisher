@@ -29,12 +29,19 @@ Markdown ──▶ Sections ──▶ 微信 HTML ──▶ 公众号草稿箱
 
 ## 特性
 
-- **一键发布** — Markdown 输入，草稿箱输出
-- **macOS 风格代码块** — 红黄绿三圆点 + 横向滚动
-- **双通道生图** — 魔搭 Qwen-Image-2512（国内免费）+ Gemini Pro（海外），自动回退
-- **自动图片上传** — 本地图片自动上传到微信 CDN
-- **杂志风主题** — 可选杂志风排版，编号章节、渐变装饰、大留白，一键切换
-- **纯内联样式** — 所有 CSS 内联，兼容微信渲染引擎
+- ✅ **直接发布** — 无需预览，直接同步到微信公众号草稿箱
+- ✅ **内置生图** — 集成魔搭 Qwen-Image-2512 生图模块，不依赖外部 skill
+- ✅ **自动排版** — 转换为微信兼容的 HTML 格式（纯内联样式）
+- ✅ **图片/视频上传** — 自动上传内联图片和视频到微信 CDN
+- ✅ **双图床策略**（核心创新）：
+  - 封面图同时上传到 **公开图床**（Catbox 优先，SM.MS 备选）供网站前端使用，无防盗链
+  - 封面图同时上传到 **微信 CDN** 供公众号内容使用，保证内容一致性
+  - 分别维护 **图床 URL**（网站用）和 **微信 CDN URL**（内容用）
+- ✅ **云端同步** — 发布后自动同步到 Convex 数据库，网站实时生效
+- ✅ **本地备份** — 自动生成 Markdown 存档，支持备份到 portfolio-v2
+- ✅ **macOS 风格代码块** — 红黄绿三圆点 + 横向滚动
+- ✅ **杂志风主题** — 可选杂志风排版，编号章节、渐变装饰、大留白，一键切换
+- ✅ **独立运行** — 完全独立，可直接分享
 
 ## 快速开始
 
@@ -105,6 +112,44 @@ node scripts/publish.mjs \
 | `--image-provider` | 否 | `modelscope`（魔搭）或 `gemini`（默认自动选择） |
 | `--theme` | 否 | `default`（经典）或 `magazine`（杂志风，默认 default） |
 
+## 完整工作流程
+
+### 发布 12 步流程
+
+```
+1. 生成标题候选（AI）
+   ↓
+2. 用户选择标题
+   ↓
+3. 生成文章内容（AI）
+   ↓
+4. 用户审阅（本地写入 /tmp/wechat-draft.md，远端展示摘要）
+   ↓
+5. 用户确认或修改后确认
+   ↓
+6. 生成封面图（ModelScope Qwen-Image-2512，后台 1-3 分钟）
+   ↓
+7. 【双图床策略】
+   ├─ 并行上传到公开图床（Catbox / SM.MS）→ 图床 URL
+   └─ 并行上传到微信 CDN → 微信 CDN URL
+   ↓
+8. 转换为微信 HTML（纯内联样式，使用微信 CDN URL）
+   ↓
+9. 上传文章内联图片/视频到微信 CDN
+   ↓
+10. 创建微信草稿
+   ↓
+11. 【同步与备份】
+    ├─ 生成 Markdown 存档（含图床 URL）→ articles/
+    ├─ 同步到 Convex 数据库（网站用图床 URL，无防盗链）
+    └─ 本地备份到 content/publisher/（如有 portfolio-v2）
+   ↓
+12. 完成！返回完整回执
+    ├─ Media ID（微信草稿 ID）
+    ├─ 图床 URL（网站前端使用）
+    └─ 微信 CDN URL（微信公众号使用）
+```
+
 ## 项目结构
 
 ```
@@ -133,19 +178,53 @@ wechat-publisher/
                     │   macOS 代码块)       │
                     └──────────┬───────────┘
                                │
-┌─────────────┐               ▼
-│   封面图     │     ┌──────────────────────┐     ┌─────────────────┐
-│ 魔搭/Gemini │────▶│  上传微信 CDN +       │────▶│   公众号草稿     │
-└─────────────┘     │  创建草稿             │     │   (Media ID)    │
-                    └──────────────────────┘     └─────────────────┘
+┌─────────────────────────────────────────────────┐
+│         【双图床策略】                              │
+├─────────────────────────────────────────────────┤
+│ ① 封面上传到公开图床                              │
+│    (Catbox 优先 / SM.MS 备选)                    │
+│    用途：网站前端展示，无防盗链 ─┐                │
+│                                   │              │
+│ ② 同时封面上传到微信 CDN         │ 并行上传      │
+│    用途：微信内容展示              │              │
+└─────────────────────────────────────────────────┘
+            ↓              ↓
+    ┌─────────────┐ ┌──────────────┐
+    │  图床 URL   │ │ 微信 CDN URL │
+    │ (网站用)    │ │ (内容用)     │
+    └─────────────┘ └──────────────┘
+            ↓              ↓
+        ┌────────────────────────┐
+        │  创建微信草稿           │
+        │  生成 Markdown 存档     │
+        │  同步到 Convex 数据库   │
+        │  本地备份到 portfolio-v2│
+        └────────────────────────┘
+                    ↓
+        ┌───────────────────────────────┐
+        │ 完成！返回完整回执：            │
+        │ - Media ID（微信草稿 ID）      │
+        │ - 图床 URL（网站前端用）       │
+        │ - 微信 CDN URL（内容用）       │
+        └───────────────────────────────┘
 ```
 
 ### 流水线详解
 
 1. **解析** — `markdown-to-sections.mjs` 将 Markdown 转为类型化的 Section 数组（标题、段落、代码块、列表等）
 2. **渲染** — `wechat-renderer.mjs` 将每个 Section 转为微信兼容的纯内联样式 HTML
-3. **生成封面** — `modelscope-imagegen.mjs`（Qwen-Image-2512，推荐）或 `gemini-imagegen.mjs`（Gemini Pro）生成 16:9 封面图，支持自动回退
-4. **上传发布** — `publish.mjs` 上传图片到微信 CDN 并通过微信公众号 API 创建草稿
+3. **生成封面** — `modelscope-imagegen.mjs`（Qwen-Image-2512，推荐，国内免费）或 `gemini-imagegen.mjs`（Gemini Pro 备选）生成 16:9 封面图，1-3 分钟耗时，支持自动回退
+4. **双图床上传**（核心创新）：
+   - 并行上传封面到公开图床（Catbox 优先，失败时用 SM.MS）→ 获得图床 URL
+   - 并行上传封面到微信 CDN → 获得微信 CDN URL
+   - 分别维护两套 URL，网站用图床 URL（无防盗链），微信内容用 CDN URL（保证一致）
+5. **HTML 转换** — 使用微信 CDN URL 转换为微信兼容 HTML
+6. **上传内联素材** — 文章中的图片和视频自动上传到微信 CDN
+7. **创建草稿** — 通过微信公众号 API 创建草稿
+8. **同步和备份**：
+   - 生成 Markdown 存档（含图床 URL）到 `articles/` 目录
+   - 同步到 Convex 数据库（网站前端使用图床 URL，实时生效）
+   - 本地备份到 `content/publisher/`（如有 portfolio-v2）
 
 ### 代码块渲染
 
@@ -155,6 +234,106 @@ wechat-publisher/
 - 每行用 `<p style="white-space:nowrap">` 包裹，禁止折行
 - 空格转换为 `&nbsp;` 兼容微信
 - `font-family` 中带空格的字体名使用**单引号**，避免截断 `style="..."` 属性
+
+## 双图床策略详解
+
+### 为什么需要双图床？
+
+| 场景 | 需求 | 解决方案 |
+|------|------|--------|
+| **微信公众号内容** | 使用微信官方 CDN，保证在微信内显示一致 | 上传到微信 CDN，使用微信 CDN URL |
+| **个人网站前端** | 独立图床，无防盗链，持久化存储 | 上传到公开图床（Catbox），保存图床 URL |
+| **数据持久化** | 记录所有 URL，便于回溯和迁移 | Markdown 存档同时记录两个 URL |
+
+### 工作流程示意
+
+```javascript
+// 单一封面图
+const coverPath = './cover.png'
+
+// 双图床同时上传（并行）
+const publicUrl = await uploadToCatbox(coverPath)      // Catbox / SM.MS
+const wxUrl = await uploadToWeChat(coverPath)           // 微信 CDN
+
+// 微信内容使用微信 CDN URL
+const wxHtml = html.replace(/cover/, wxUrl)
+
+// Markdown 存档同时保存两个 URL
+const archive = `
+---
+title: 文章标题
+coverUrl: ${publicUrl}      // 网站前端使用
+wxMediaId: ${wxMediaId}     // 微信使用
+---
+...
+`
+
+// Convex 数据库使用图床 URL（网站前端无防盗链）
+await syncToConvex({
+  title, content, coverUrl: publicUrl, mediaId
+})
+```
+
+### 好处
+
+✅ **微信内容一致** — 微信公众号总是用微信 CDN URL，保证显示一致性
+✅ **网站独立** — 网站前端用公开图床 URL，不受微信防盗链限制
+✅ **数据安全** — 同时保存两个 URL，任何一个服务故障都有备份
+✅ **迁移灵活** — 可以随时切换图床，因为有完整的 URL 记录
+
+## Convex 数据库同步
+
+### 配置 Convex（可选）
+
+如果配置了 `CONVEX_URL`，发布后会自动同步到你的 Convex 数据库：
+
+```env
+CONVEX_URL=https://your-deployment.convex.cloud
+```
+
+**Convex 端需要实现的 API：**
+
+```typescript
+// convex/articles.ts
+import { mutation } from './_generated/server';
+import { v } from 'convex/values';
+
+export const createOrUpdate = mutation({
+  args: {
+    title: v.string(),
+    content: v.string(),
+    coverUrl: v.string(),      // 使用图床 URL
+    wxMediaId: v.string(),     // 微信草稿 ID
+    mediaId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    return await ctx.db.insert('articles', {
+      ...args,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+  },
+});
+```
+
+然后在 HTTP 路由中注册：
+
+```typescript
+// convex/http.ts
+app.route({
+  path: '/api/mutation',
+  method: 'POST',
+  handler: async (request) => {
+    const body = await request.json();
+    if (body.action === 'articles:createOrUpdate') {
+      // 调用 mutation 并返回结果
+      return { ok: true };
+    }
+  },
+});
+```
+
+**同步失败时：** 脚本会捕获异常并打印警告，但不会中断发布流程。微信草稿仍会成功创建。
 
 ## 编程接口
 
