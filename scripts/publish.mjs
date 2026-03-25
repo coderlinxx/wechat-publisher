@@ -125,15 +125,57 @@ function guessMimeType(filePath) {
 
 // ============ 图床上传 ============
 async function uploadToCatbox(filePath) {
-  const url = await httpsPostMultipart(
-    'https://catbox.moe/user/api.php',
-    'fileToUpload',
-    filePath,
-    guessMimeType(filePath),
-    { reqtype: 'fileupload' }
-  );
-  if (typeof url === 'string' && url.startsWith('https://')) return url;
-  throw new Error(`Catbox 上传失败: ${url}`);
+  // Catbox 要求 reqtype 在文件字段之前，用专用实现确保字段顺序
+  return new Promise((resolve, reject) => {
+    const u = new URL('https://catbox.moe/user/api.php');
+    const boundary = '----FormBoundary' + crypto.randomBytes(8).toString('hex');
+    const fileName = path.basename(filePath);
+    const fileData = fs.readFileSync(filePath);
+    const CRLF = '\r\n';
+    const parts = [];
+    // reqtype 字段必须在文件前面
+    parts.push(Buffer.from(
+      `--${boundary}${CRLF}` +
+      `Content-Disposition: form-data; name="reqtype"${CRLF}${CRLF}` +
+      `fileupload${CRLF}`
+    ));
+    // 文件字段
+    parts.push(Buffer.from(
+      `--${boundary}${CRLF}` +
+      `Content-Disposition: form-data; name="fileToUpload"; filename="${fileName}"${CRLF}` +
+      `Content-Type: ${guessMimeType(filePath)}${CRLF}${CRLF}`
+    ));
+    parts.push(fileData);
+    parts.push(Buffer.from(CRLF));
+    parts.push(Buffer.from(`--${boundary}--${CRLF}`));
+    const bodyBuffer = Buffer.concat(parts);
+
+    const req = https.request({
+      hostname: u.hostname,
+      path: u.pathname,
+      method: 'POST',
+      headers: {
+        'Content-Type': `multipart/form-data; boundary=${boundary}`,
+        'Content-Length': bodyBuffer.length.toString(),
+        'User-Agent': 'Mozilla/5.0',
+      },
+      timeout: 30000,
+    }, (res) => {
+      let data = '';
+      res.on('data', chunk => data += chunk);
+      res.on('end', () => {
+        if (typeof data === 'string' && data.startsWith('https://')) {
+          resolve(data.trim());
+        } else {
+          reject(new Error(`Catbox 返回异常: ${data}`));
+        }
+      });
+    });
+    req.on('error', reject);
+    req.on('timeout', () => { req.destroy(); reject(new Error('Catbox 上传超时(30s)')); });
+    req.write(bodyBuffer);
+    req.end();
+  });
 }
 
 async function uploadToSmms(filePath) {
@@ -520,15 +562,7 @@ async function main() {
   }
   mdContent += content;
 
-  // 写入 articles/ 目录（本地存档）
-  const articlesDir = path.resolve(__dirname, '../../articles');
-  if (!fs.existsSync(articlesDir)) {
-    fs.mkdirSync(articlesDir, { recursive: true });
-  }
   const mdFileName = `${slug}.md`;
-  const mdFilePath = path.join(articlesDir, mdFileName);
-  fs.writeFileSync(mdFilePath, mdContent, 'utf-8');
-  console.log(`📄 文章已存档: ${mdFilePath}`);
 
   // 6. 同步到 Convex 数据库（直接 HTTP API，无需本地项目）
   if (CONVEX_URL) {
@@ -557,20 +591,19 @@ async function main() {
       console.log(`✅ 已同步到网站！(${convexResult.action || 'done'})`);
     } catch (err) {
       console.error(`⚠️  Convex 同步失败: ${err.message}`);
-      console.error('   文章已本地存档，可稍后手动同步。');
     }
   } else {
     console.log('ℹ️  未配置 CONVEX_URL，跳过数据库同步。');
   }
 
-  // 7. 本地有 portfolio-v2 则拷贝备份（可选）
+  // 7. 本地有 portfolio-v2 则备份
   const portfolioPublisherDir = path.resolve(os.homedir(), 'Documents/develop/H5Projects/portfolio-v2/content/publisher');
   if (fs.existsSync(path.resolve(os.homedir(), 'Documents/develop/H5Projects/portfolio-v2'))) {
     if (!fs.existsSync(portfolioPublisherDir)) {
       fs.mkdirSync(portfolioPublisherDir, { recursive: true });
     }
     const destPath = path.join(portfolioPublisherDir, mdFileName);
-    fs.copyFileSync(mdFilePath, destPath);
+    fs.writeFileSync(destPath, mdContent, 'utf-8');
     console.log(`📋 已备份到 portfolio-v2: ${destPath}`);
   }
 }

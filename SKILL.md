@@ -11,10 +11,15 @@ trigger: 当用户要求"发布微信文章"、"写公众号"、"直接发微信
 ## 特性
 
 - ✅ **直接发布**：无需预览，直接同步到微信公众号草稿箱
-- ✅ **内置生图**：集成魔搭/Qwen-Image 生图模块，不依赖外部 skill
-- ✅ **自动排版**：转换为微信兼容的 HTML 格式
-- ✅ **图片/视频上传**：自动上传图片和视频到微信 CDN
-- ✅ **图床同步**：封面图自动上传到 Catbox（+ SM.MS 备选），供网站前端展示，无防盗链问题
+- ✅ **内置生图**：集成魔搭 Qwen-Image-2512 生图模块，不依赖外部 skill
+- ✅ **自动排版**：转换为微信兼容的 HTML 格式（纯内联样式）
+- ✅ **图片/视频上传**：自动上传内联图片和视频到微信 CDN
+- ✅ **双图床策略**：
+  - 封面图同时上传到 **公开图床**（Catbox 优先，SM.MS 备选）供网站前端使用，无防盗链
+  - 封面图同时上传到 **微信 CDN** 供公众号内容使用，保证在微信内容一致性
+  - 分别维护 **图床 URL**（网站用）和 **微信 CDN URL**（内容用）
+- ✅ **云端同步**：发布后自动同步到 Convex 数据库，网站实时生效
+- ✅ **本地备份**：自动生成 Markdown 存档，支持备份到 portfolio-v2
 - ✅ **独立运行**：完全独立，可直接分享
 
 ## 配置
@@ -43,11 +48,17 @@ AI 会：
 1. 生成 5-8 个候选标题
 2. 用户选择标题
 3. 生成文章内容
-4. 生成封面图（ModelScope/Gemini）并上传到图床（Catbox，备选 SM.MS）
-5. 转换为微信 HTML（封面图用微信 CDN URL）
-6. 上传文章图片到微信 CDN
-7. 创建草稿并同步
-8. 返回 Media ID
+4. 生成封面图（ModelScope Qwen-Image-2512，后台 1-3 分钟）
+5. 双图床上传：
+   - 封面上传到公开图床（Catbox 优先，SM.MS 备选）→ 获得图床 URL
+   - 封面同时上传到微信 CDN → 获得微信 CDN URL
+6. 转换为微信 HTML（纯内联样式，使用微信 CDN URL）
+7. 上传文章内联图片/视频到微信 CDN
+8. 创建微信草稿
+9. 生成 Markdown 存档（含图床 URL）到 articles/
+10. 同步到 Convex 数据库（网站前端使用图床 URL）
+11. 本地备份到 content/publisher/（如有 portfolio-v2）
+12. 返回完整回执：Media ID + 图床 URL + 微信 CDN URL
 
 ### 2. 从 Markdown 文件创建
 
@@ -79,25 +90,39 @@ AI 会：
   ↓
 用户确认（或修改后确认）→ 继续发布
   ↓
-生成封面（ModelScope/Gemini，后台）
+生成封面（ModelScope/Gemini，后台，1-3 分钟）
   ↓
-封面上传到公开图床（Catbox优先，SM.MS备选）→ 图床 URL
+┌────────────────────────────────────────────────────┐
+│ 【双图床策略】                                       │
+├────────────────────────────────────────────────────┤
+│ ① 封面上传到公开图床                                │
+│    Catbox（优先）/ SM.MS（备选）→ 图床 URL         │
+│    用途：网站前端展示，无防盗链，持久化存储          │
+│                                                     │
+│ ② 同时封面上传到微信 CDN                           │
+│    → 微信 CDN URL                                  │
+│    用途：微信内容使用，保证内容一致性               │
+└────────────────────────────────────────────────────┘
   ↓
-封面上传到微信 CDN → 微信内容用 CDN URL
-  ↓
-转换为微信 HTML（封面用 CDN URL）
+转换为微信 HTML（纯内联样式，封面用微信 CDN URL）
   ↓
 上传文章内联图片/视频到微信 CDN
   ↓
-创建草稿（封面图用微信 CDN URL）
+创建草稿（微信 API，封面图用微信 CDN URL）
   ↓
-生成 .md 存档（含图床封面 URL）→ articles/
-  ↓
-同步到 Convex 数据库（封面用图床 URL，网站前端无防盗链）→ 网站实时生效
-  ↓
-本地备份到 content/publisher/（如有 portfolio-v2）
+┌────────────────────────────────────────────────────┐
+│ 【同步与备份】                                       │
+├────────────────────────────────────────────────────┤
+│ ① 生成 .md 存档（含图床封面 URL）→ articles/      │
+│ ② 同步到 Convex 数据库（网站用图床 URL，无防盗链）│
+│    网站前端实时生效                                 │
+│ ③ 本地备份到 content/publisher/（如有 portfolio-v2）
+└────────────────────────────────────────────────────┘
   ↓
 完成！返回 Media ID + 图片 URL 回执
+  - Media ID：微信草稿 ID
+  - 图床 URL：网站前端使用
+  - 微信 CDN URL：微信公众号使用
 ```
 
 ## 核心脚本
@@ -353,32 +378,74 @@ node scripts/publish.mjs \
   --theme magazine
 ```
 
-脚本内部流程：
+脚本内部流程（双图床策略）：
 
 ```javascript
 import { markdownToSections } from './markdown-to-sections.mjs';
 import { wxRenderSections } from './wechat-renderer.mjs';
 
-// 1. 生成封面
+// 1. 生成封面（ModelScope Qwen-Image-2512，后台 1-3 分钟）
 const coverPath = await generateCover(title, content);
 
 // 2. Markdown → Section → 微信 HTML（可切换主题）
 const sections = markdownToSections(markdown, { theme: 'magazine' });
 const html = wxRenderSections(sections, { theme: 'magazine' });
 
-// 3. 上传封面图到公开图床（供网站前端展示）
+// 3. 【双图床策略】 - 同时上传到两个目标
+// ① 上传封面图到公开图床（Catbox 优先，SM.MS 备选）
+// 用途：网站前端展示，无防盗链，持久化存储
 const publicCoverUrl = await uploadToCatbox(coverPath);
-// 同时上传封面图到微信 CDN（供微信公众号内容使用）
-const thumbMediaId = await uploadImage(coverPath);
 
-// 4. 上传文章内联图片到微信 CDN
-const processedHTML = await uploadInlineMedia(html);
+// ② 同时上传封面图到微信 CDN
+// 用途：微信公众号内容使用，保证内容一致性
+const wxThumbMediaId = await uploadImageToWeChat(coverPath);
 
-// 5. 创建草稿
+// 4. 转换为微信 HTML（使用微信 CDN URL）
+const wxCoverUrl = await getWeChatCDNUrl(wxThumbMediaId);
+const finalHtml = html.replace(/cover-placeholder/, wxCoverUrl);
+
+// 5. 上传文章内联图片/视频到微信 CDN
+const processedHTML = await uploadInlineMedia(finalHtml);
+
+// 6. 创建草稿（微信 API）
 const result = await createDraft({
-  title, content: processedHTML, thumbMediaId, author: '龙虾'
+  title,
+  content: processedHTML,
+  thumbMediaId: wxThumbMediaId,  // 使用微信 CDN 的媒体 ID
+  author: '龙虾'
 });
-console.log('草稿创建成功！Media ID:', result.mediaId);
+
+// 7. 生成 Markdown 存档（含图床 URL，用于网站展示）
+const archiveContent = `---
+title: ${title}
+coverUrl: ${publicCoverUrl}  // 网站前端使用
+wxMediaId: ${wxThumbMediaId}  // 微信使用
+date: ${new Date().toISOString()}
+---
+
+${markdown}`;
+await fs.writeFile(`articles/${slugify(title)}.md`, archiveContent);
+
+// 8. 同步到 Convex 数据库（网站使用图床 URL，无防盗链）
+if (CONVEX_URL) {
+  await syncToConvex({
+    title,
+    content: markdown,
+    coverUrl: publicCoverUrl,  // Convex 使用图床 URL
+    mediaId: result.mediaId
+  });
+}
+
+// 9. 本地备份到 content/publisher/（如有 portfolio-v2）
+if (fs.existsSync('content/publisher')) {
+  await fs.writeFile(`content/publisher/${slugify(title)}.md`, archiveContent);
+}
+
+// 10. 返回完整回执
+console.log('✅ 草稿创建成功！');
+console.log('📱 微信 Media ID:', result.mediaId);
+console.log('🔗 图床 URL（网站用）:', publicCoverUrl);
+console.log('📡 微信 CDN URL（内容用）:', wxCoverUrl);
 ```
 
 ## 分享
